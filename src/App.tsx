@@ -4,6 +4,7 @@ import { CompressionOptions } from './components/CompressionOptions';
 import { DropZone } from './components/DropZone';
 import { ImageList } from './components/ImageList';
 import { DownloadAll } from './components/DownloadAll';
+import { downloadImage } from './utils/download';
 import { ResizeOptions } from './components/ResizeOptions';
 import { ProcessingOptions } from './components/ProcessingOptions';
 import { useImageQueue } from './hooks/useImageQueue';
@@ -85,11 +86,12 @@ export function App() {
     const completedImages = images.filter((img) => img.status === 'complete');
     for (const image of completedImages) {
       if (image.blob && image.outputType) {
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(image.blob);
-        link.download = `${image.file.name.split('.')[0]}.${image.outputType}`;
-        link.click();
-        URL.revokeObjectURL(link.href);
+        downloadImage(image)
+        // const link = document.createElement('a');
+        // link.href = URL.createObjectURL(image.blob);
+        // link.download = `${image.file.name.split('.')[0]}.${image.outputType}`;
+        // link.click();
+        // URL.revokeObjectURL(link.href);
       }
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
