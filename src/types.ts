@@ -20,6 +20,7 @@ export interface FormatQualitySettings {
   jpeg: number;
   jxl: number;
   webp: number;
+  png: number;
 }
 
 export interface CompressionOptions {
@@ -33,8 +34,7 @@ export interface ResizeOptions {
   width: number;
   height: number;
   maintainAspectRatio: boolean;
-  /** Currently only 'lanczos3' is supported (for documentation purposes) */
-  method: 'lanczos3';
+  method: 'default';
   premultiplyAlpha: boolean;
   linearRGB: boolean;
 }
@@ -45,7 +45,7 @@ export const DEFAULT_RESIZE_OPTIONS: ResizeOptions = {
   width: 6960, // for 100%
   height: 4640,
   maintainAspectRatio: true,
-  method: 'lanczos3',
+  method: 'default',
   premultiplyAlpha: true,
   linearRGB: true,
 };

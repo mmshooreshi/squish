@@ -1,5 +1,3 @@
-// /src/App.tsx
-
 import React, { useState, useCallback, useEffect } from 'react';
 import { Image, Trash2 } from 'lucide-react';
 import { CompressionOptions } from './components/CompressionOptions';
@@ -13,12 +11,16 @@ import { DEFAULT_QUALITY_SETTINGS } from './utils/formatDefaults';
 import { DEFAULT_RESIZE_OPTIONS } from './types';
 import type { ImageFile, OutputType, CompressionOptions as CompressionOptionsType } from './types';
 
-
-
 export function App() {
   const [images, setImages] = useState<ImageFile[]>([]);
+  const [outputType, setOutputType] = useState<OutputType>('avif');
+  const [options, setOptions] = useState<CompressionOptionsType>({
+    quality: DEFAULT_QUALITY_SETTINGS.webp, // or whichever default
+  });
+  const [resizeOptions, setResizeOptions] = useState(DEFAULT_RESIZE_OPTIONS);
+  const [processLevel, setProcessLevel] = useState(4); // processing intensity
 
-  // 1) Maybe update every 2 seconds to reduce overhead
+  // Update each "processing" image's elapsed time every 2 seconds
   useEffect(() => {
     const timer = setInterval(() => {
       setImages((prev) =>
@@ -26,7 +28,7 @@ export function App() {
           if (img.status === 'processing' && img.startTime) {
             return {
               ...img,
-              elapsed: ((Date.now() - img.startTime) / 1000 + 1).toFixed(0),
+              elapsed: ((Date.now() - img.startTime) / 1000 + 1).toFixed(0)
             };
           } else if (img.status === 'processing' && !img.startTime) {
             return { ...img, startTime: Date.now() };
@@ -35,16 +37,8 @@ export function App() {
         })
       );
     }, 2000);
-
     return () => clearInterval(timer);
-  }, [setImages]);
-
-  const [outputType, setOutputType] = useState<OutputType>('avif');
-  const [options, setOptions] = useState<CompressionOptionsType>({
-    quality: DEFAULT_QUALITY_SETTINGS.webp,
-  });
-  const [resizeOptions, setResizeOptions] = useState(DEFAULT_RESIZE_OPTIONS);
-  const [processLevel, setProcessLevel] = useState(4); // default = 2
+  }, []);
 
   const { addToQueue } = useImageQueue(
     options,
@@ -56,15 +50,11 @@ export function App() {
 
   const handleOutputTypeChange = useCallback((type: OutputType) => {
     setOutputType(type);
-    if (type !== 'png') {
-      setOptions({ quality: DEFAULT_QUALITY_SETTINGS[type] });
-    }
   }, []);
 
   const handleFilesDrop = useCallback(
     (newImages: ImageFile[]) => {
       setImages((prev) => [...prev, ...newImages]);
-      // We'll queue them as soon as we have them
       requestAnimationFrame(() => {
         newImages.forEach((image) => addToQueue(image.id));
       });
@@ -109,54 +99,48 @@ export function App() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="max-w-4xl mx-auto px-4 py-12">
-        <div className="text-center mb-8">
-          <div className="flex items-center justify-center gap-2 mb-4">
-            <Image className="w-8 h-8 text-blue-500" />
-            <h1 className="text-3xl font-bold text-gray-900">Squish</h1>
-          </div>
-          <p className="text-gray-600">
-            Compress and convert your images to AVIF, JPEG, JPEG XL, PNG, or WebP
-          </p>
+      <div className="max-w-5xl mx-auto p-4">
+        <div className="flex items-center justify-between mb-4">
+          <h1 className="text-xl font-bold flex items-center gap-2">
+            <Image className="w-5 h-5" />
+            Squoosh Playground
+          </h1>
+          <button
+            onClick={handleClearAll}
+            className="text-red-500 hover:underline flex items-center gap-1"
+          >
+            <Trash2 className="w-4 h-4" />
+            Clear All
+          </button>
         </div>
 
-        <div className="space-y-6">
-          <CompressionOptions
-            options={options}
-            outputType={outputType}
-            onOptionsChange={setOptions}
-            onOutputTypeChange={handleOutputTypeChange}
+        <CompressionOptions
+          options={options}
+          outputType={outputType}
+          onOptionsChange={setOptions}
+          onOutputTypeChange={handleOutputTypeChange}
+        />
+
+        <ResizeOptions
+          options={resizeOptions}
+          onOptionsChange={setResizeOptions}
+        />
+
+        <ProcessingOptions
+          processLevel={processLevel}
+          onChange={setProcessLevel}
+        />
+
+        <DropZone onFilesDrop={handleFilesDrop} />
+
+        {completedImages > 0 && (
+          <DownloadAll
+            onDownloadAll={handleDownloadAll}
+            count={completedImages}
           />
-          <ResizeOptions
-            options={resizeOptions}
-            onOptionsChange={setResizeOptions}
-          />
-          <ProcessingOptions
-            processLevel={processLevel}
-            onChange={setProcessLevel}
-          />
+        )}
 
-          <DropZone onFilesDrop={handleFilesDrop} />
-
-          {completedImages > 0 && (
-            <DownloadAll
-              onDownloadAll={handleDownloadAll}
-              count={completedImages}
-            />
-          )}
-
-          <ImageList images={images} onRemove={handleRemoveImage} />
-
-          {images.length > 0 && (
-            <button
-              onClick={handleClearAll}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
-            >
-              <Trash2 className="w-5 h-5" />
-              Clear All
-            </button>
-          )}
-        </div>
+        <ImageList images={images} onRemove={handleRemoveImage} />
       </div>
     </div>
   );

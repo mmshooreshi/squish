@@ -1,16 +1,11 @@
-// /src/workers/imageProcessor.worker.ts
+/// <reference lib="webworker" />
 
-// 1) **Remove** dynamic import calls.
-// 2) **Statically** import everything needed upfront:
-import { decode, encode, getFileType } from '../utils/imageProcessing';
+import { decode, encode } from '../utils/imageProcessing';
 import { resizeImage } from '../utils/resize';
-
-// We'll reduce the frequency of messages to reduce overhead.
 
 interface WorkerMessageData {
   id: string;
   fileBuffer: ArrayBuffer;
-  // We'll derive sourceType from the file itself, so it might be optional now:
   sourceType?: string;
   outputType: string;
   compressionOptions: { quality: number };
@@ -19,11 +14,19 @@ interface WorkerMessageData {
     width: number;
     height: number;
     maintainAspectRatio: boolean;
-    method: 'lanczos3';
+    method: 'default';
     premultiplyAlpha: boolean;
     linearRGB: boolean;
   };
-  startTime?: number;
+}
+
+interface WorkerResponse {
+  id: string;
+  success: boolean;
+  compressedBuffer?: ArrayBuffer;
+  error?: string;
+  outputType?: string;
+  progress?: number;
 }
 
 self.onmessage = async (event: MessageEvent<WorkerMessageData>) => {
@@ -33,45 +36,41 @@ self.onmessage = async (event: MessageEvent<WorkerMessageData>) => {
     sourceType,
     outputType,
     compressionOptions,
-    resizeOptions,
-    startTime,
+    resizeOptions
   } = event.data;
 
   try {
-    // 1) Decode
-    const actualSourceType = sourceType || 'image/jpeg';
-    const decoded = await decode(actualSourceType, fileBuffer);
+    // Decode
+    const decoded = await decode(sourceType || 'image/jpeg', fileBuffer);
+    // Post a partial progress
+    self.postMessage({ id, progress: 50 } as WorkerResponse);
 
-    // (Optional) Post a single partial progress if you want (e.g. 50%):
-    self.postMessage({ id, progress: 50 });
-
-    // 2) Resize if needed
-    let finalImage = decoded;
+    // Resize if needed
+    let finalData = decoded;
     if (resizeOptions?.enabled) {
-      finalImage = resizeImage(decoded, resizeOptions);
+      finalData = resizeImage(decoded, resizeOptions);
     }
 
-    // 3) Encode
-    const compressedBuffer = await encode(outputType as any, finalImage, compressionOptions);
+    // Encode
+    const compressedBuffer = await encode(outputType as any, finalData, compressionOptions);
+    // Final progress
+    self.postMessage({ id, progress: 100 } as WorkerResponse);
 
-    // Just before final output, 100% progress:
-    self.postMessage({ id, progress: 100 });
-
-    // Return result
+    // Return
     self.postMessage(
       {
         id,
         success: true,
         compressedBuffer,
-        outputType,
-      },
-      [compressedBuffer] // Transfer ownership
+        outputType
+      } as WorkerResponse,
+      [compressedBuffer] // Transfer
     );
   } catch (error) {
     self.postMessage({
       id,
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
-    });
+      error: error instanceof Error ? error.message : String(error)
+    } as WorkerResponse);
   }
 };

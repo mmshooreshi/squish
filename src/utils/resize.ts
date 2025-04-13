@@ -4,7 +4,7 @@ interface ExtendedResizeOptions {
   width?: number;
   height?: number;
   maintainAspectRatio?: boolean;
-  method?: 'lanczos3'; // currently fixed
+  method?: 'default'; 
   premultiplyAlpha?: boolean;
   linearRGB?: boolean;
 }
@@ -14,53 +14,39 @@ export function calculateDimensions(
   originalHeight: number,
   options: ExtendedResizeOptions
 ): { width: number; height: number } {
-  const { width: targetWidth = 0, height: targetHeight = 0, maintainAspectRatio = true } = options;
+  const { width: targetW = 0, height: targetH = 0, maintainAspectRatio = true } = options;
 
-  if (!targetWidth && !targetHeight) {
+  if (targetW <= 0 && targetH <= 0) {
     return { width: originalWidth, height: originalHeight };
   }
 
-  let finalWidth = targetWidth || originalWidth;
-  let finalHeight = targetHeight || originalHeight;
-
   if (maintainAspectRatio) {
-    const aspectRatio = originalWidth / originalHeight;
-
-    if (targetWidth && !targetHeight) {
-      finalWidth = targetWidth;
-      finalHeight = Math.round(targetWidth / aspectRatio);
-    } else if (!targetWidth && targetHeight) {
-      finalHeight = targetHeight;
-      finalWidth = Math.round(targetHeight * aspectRatio);
+    const origRatio = originalWidth / originalHeight;
+    if (targetW > 0 && targetH <= 0) {
+      return { width: targetW, height: Math.round(targetW / origRatio) };
+    } else if (targetH > 0 && targetW <= 0) {
+      return { width: Math.round(targetH * origRatio), height: targetH };
     } else {
-      const widthRatio = targetWidth / originalWidth;
-      const heightRatio = targetHeight / originalHeight;
-      const ratio = Math.min(widthRatio, heightRatio);
-
-      finalWidth = Math.round(originalWidth * ratio);
-      finalHeight = Math.round(originalHeight * ratio);
+      // Both are set
+      return { width: targetW, height: targetH };
     }
   }
-
-  return {
-    width: Math.max(1, finalWidth),
-    height: Math.max(1, finalHeight),
-  };
+  return { width: targetW || originalWidth, height: targetH || originalHeight };
 }
 
 export function resizeImage(imageData: ImageData, options: ExtendedResizeOptions): ImageData {
   const sourceCanvas = imageDataToCanvas(imageData);
-  const { width, height } = calculateDimensions(imageData.width, imageData.height, options);
+  const { width, height } = calculateDimensions(
+    imageData.width,
+    imageData.height,
+    options
+  );
 
   const destCanvas = createCanvas(width, height);
   const ctx = destCanvas.getContext('2d')!;
-
-  // Use high-quality scaling.
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-
-  // Note: The Canvas API does not expose the Lanczos3 algorithm or premultiply/linearRGB controls.
-  // These options are kept for documentation/future implementation.
   ctx.drawImage(sourceCanvas, 0, 0, width, height);
+
   return ctx.getImageData(0, 0, width, height);
 }

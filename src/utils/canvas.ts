@@ -1,3 +1,4 @@
+// Canvas utility functions
 export function createCanvas(width: number, height: number): HTMLCanvasElement | OffscreenCanvas {
   if (typeof OffscreenCanvas !== 'undefined') {
     return new OffscreenCanvas(width, height);
