@@ -1,21 +1,58 @@
-import React, { useState, useCallback } from 'react';
+// /src/App.tsx
+
+import React, { useState, useCallback, useEffect } from 'react';
 import { Image, Trash2 } from 'lucide-react';
 import { CompressionOptions } from './components/CompressionOptions';
 import { DropZone } from './components/DropZone';
 import { ImageList } from './components/ImageList';
 import { DownloadAll } from './components/DownloadAll';
+import { ResizeOptions } from './components/ResizeOptions';
+import { ProcessingOptions } from './components/ProcessingOptions';
 import { useImageQueue } from './hooks/useImageQueue';
 import { DEFAULT_QUALITY_SETTINGS } from './utils/formatDefaults';
+import { DEFAULT_RESIZE_OPTIONS } from './types';
 import type { ImageFile, OutputType, CompressionOptions as CompressionOptionsType } from './types';
+
+
 
 export function App() {
   const [images, setImages] = useState<ImageFile[]>([]);
-  const [outputType, setOutputType] = useState<OutputType>('webp');
+
+  // 1) Maybe update every 2 seconds to reduce overhead
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setImages((prev) =>
+        prev.map((img) => {
+          if (img.status === 'processing' && img.startTime) {
+            return {
+              ...img,
+              elapsed: ((Date.now() - img.startTime) / 1000 + 1).toFixed(0),
+            };
+          } else if (img.status === 'processing' && !img.startTime) {
+            return { ...img, startTime: Date.now() };
+          }
+          return img;
+        })
+      );
+    }, 2000);
+
+    return () => clearInterval(timer);
+  }, [setImages]);
+
+  const [outputType, setOutputType] = useState<OutputType>('avif');
   const [options, setOptions] = useState<CompressionOptionsType>({
     quality: DEFAULT_QUALITY_SETTINGS.webp,
   });
+  const [resizeOptions, setResizeOptions] = useState(DEFAULT_RESIZE_OPTIONS);
+  const [processLevel, setProcessLevel] = useState(4); // default = 2
 
-  const { addToQueue } = useImageQueue(options, outputType, setImages);
+  const { addToQueue } = useImageQueue(
+    options,
+    outputType,
+    setImages,
+    resizeOptions,
+    processLevel
+  );
 
   const handleOutputTypeChange = useCallback((type: OutputType) => {
     setOutputType(type);
@@ -24,29 +61,29 @@ export function App() {
     }
   }, []);
 
-  const handleFilesDrop = useCallback((newImages: ImageFile[]) => {
-    // First add all images to state
-    setImages((prev) => [...prev, ...newImages]);
-    
-    // Use requestAnimationFrame to wait for render to complete
-    requestAnimationFrame(() => {
-      // Then add to queue after UI has updated
-      newImages.forEach(image => addToQueue(image.id));
-    });
-  }, [addToQueue]);
+  const handleFilesDrop = useCallback(
+    (newImages: ImageFile[]) => {
+      setImages((prev) => [...prev, ...newImages]);
+      // We'll queue them as soon as we have them
+      requestAnimationFrame(() => {
+        newImages.forEach((image) => addToQueue(image.id));
+      });
+    },
+    [addToQueue]
+  );
 
   const handleRemoveImage = useCallback((id: string) => {
     setImages((prev) => {
-      const image = prev.find(img => img.id === id);
+      const image = prev.find((img) => img.id === id);
       if (image?.preview) {
         URL.revokeObjectURL(image.preview);
       }
-      return prev.filter(img => img.id !== id);
+      return prev.filter((img) => img.id !== id);
     });
   }, []);
 
   const handleClearAll = useCallback(() => {
-    images.forEach(image => {
+    images.forEach((image) => {
       if (image.preview) {
         URL.revokeObjectURL(image.preview);
       }
@@ -55,22 +92,20 @@ export function App() {
   }, [images]);
 
   const handleDownloadAll = useCallback(async () => {
-    const completedImages = images.filter((img) => img.status === "complete");
-
+    const completedImages = images.filter((img) => img.status === 'complete');
     for (const image of completedImages) {
       if (image.blob && image.outputType) {
-        const link = document.createElement("a");
+        const link = document.createElement('a');
         link.href = URL.createObjectURL(image.blob);
-        link.download = `${image.file.name.split(".")[0]}.${image.outputType}`;
+        link.download = `${image.file.name.split('.')[0]}.${image.outputType}`;
         link.click();
         URL.revokeObjectURL(link.href);
       }
-
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }, [images]);
 
-  const completedImages = images.filter(img => img.status === 'complete').length;
+  const completedImages = images.filter((img) => img.status === 'complete').length;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -92,17 +127,25 @@ export function App() {
             onOptionsChange={setOptions}
             onOutputTypeChange={handleOutputTypeChange}
           />
+          <ResizeOptions
+            options={resizeOptions}
+            onOptionsChange={setResizeOptions}
+          />
+          <ProcessingOptions
+            processLevel={processLevel}
+            onChange={setProcessLevel}
+          />
 
           <DropZone onFilesDrop={handleFilesDrop} />
 
           {completedImages > 0 && (
-            <DownloadAll onDownloadAll={handleDownloadAll} count={completedImages} />
+            <DownloadAll
+              onDownloadAll={handleDownloadAll}
+              count={completedImages}
+            />
           )}
 
-          <ImageList 
-            images={images} 
-            onRemove={handleRemoveImage} 
-          />
+          <ImageList images={images} onRemove={handleRemoveImage} />
 
           {images.length > 0 && (
             <button

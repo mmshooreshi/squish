@@ -1,146 +1,149 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
-import type { ImageFile, OutputType, CompressionOptions } from '../types';
-import { decode, encode, getFileType } from '../utils/imageProcessing';
+// /src/hooks/useImageQueue.ts
+
+import { useState, useEffect, useRef, useCallback } from 'react';
+import type { ImageFile, OutputType, CompressionOptions, ResizeOptions } from '../types';
+import { getFileType } from '../utils/imageProcessing';
+
+interface WorkerResponse {
+  id: string;
+  success: boolean;
+  compressedBuffer?: ArrayBuffer;
+  error?: string;
+  outputType?: string;
+  progress?: number;
+}
 
 export function useImageQueue(
-  options: CompressionOptions,
+  compressionOptions: CompressionOptions,
   outputType: OutputType,
-  setImages: React.Dispatch<React.SetStateAction<ImageFile[]>>
+  setImages: React.Dispatch<React.SetStateAction<ImageFile[]>>,
+  resizeOptions: ResizeOptions,
+  processLevel: number
 ) {
-  const MAX_PARALLEL_PROCESSING = 3;
   const [queue, setQueue] = useState<string[]>([]);
-  const processingCount = useRef(0);
-  const processingImages = useRef(new Set<string>());
 
-  const processImage = useCallback(async (image: ImageFile) => {
-    if (processingImages.current.has(image.id)) {
-      return; // Skip if already processing this image
+  // We'll create either 1 worker or up to 4, not unbounded by hardwareConcurrency.
+  const MAX_POOL_SIZE = 4;
+  const workerPoolRef = useRef<Worker[]>([]);
+  const roundRobinIndex = useRef(0);
+
+  // Single message handler for all workers in the pool
+  const messageHandler = (event: MessageEvent<WorkerResponse>) => {
+    const { id, success, compressedBuffer, error, outputType, progress } = event.data;
+
+    if (progress !== undefined) {
+      // If we want to track progress in the UI, store it
+      setImages(prev =>
+        prev.map(img => (img.id === id ? { ...img, progress } : img))
+      );
     }
-    processingImages.current.add(image.id);
-    processingCount.current++;
 
-    try {
-      setImages((prev) =>
-        prev.map((img) =>
-          img.id === image.id
-            ? { ...img, status: 'processing' as const }
-            : img
-        )
+    if (success) {
+      if (compressedBuffer) {
+        const blob = new Blob([compressedBuffer], { type: `image/${outputType}` });
+        const preview = URL.createObjectURL(blob);
+        setImages(prev =>
+          prev.map(img =>
+            img.id === id
+              ? {
+                  ...img,
+                  status: 'complete',
+                  preview,
+                  blob,
+                  compressedSize: compressedBuffer.byteLength,
+                  outputType,
+                  progress: 100,
+                }
+              : img
+          )
+        );
+      }
+    } else if (error) {
+      setImages(prev =>
+        prev.map(img => (img.id === id ? { ...img, status: 'error', error } : img))
+      );
+    }
+  };
+
+  // Initialize a worker pool
+  useEffect(() => {
+    // Cleanup any existing workers
+    workerPoolRef.current.forEach(w => w.terminate());
+    workerPoolRef.current = [];
+
+    // Decide how many workers to spawn
+    let numWorkers = 1;
+    // If processLevel >= 3 or 4, let's spawn up to 4
+    if (processLevel >= 3) {
+      numWorkers = Math.min(MAX_POOL_SIZE, navigator.hardwareConcurrency || MAX_POOL_SIZE);
+    }
+
+    // Create that many
+    for (let i = 0; i < numWorkers; i++) {
+      const worker = new Worker(
+        new URL('../workers/imageProcessor.worker.ts', import.meta.url),
+        { type: 'module' }
+      );
+      worker.addEventListener('message', messageHandler);
+      workerPoolRef.current.push(worker);
+    }
+
+    // Cleanup on unmount
+    return () => {
+      workerPoolRef.current.forEach(w => w.terminate());
+    };
+  }, [processLevel, setImages]);
+
+  const processImage = useCallback(
+    async (image: ImageFile) => {
+      // Round-robin pick
+      const pool = workerPoolRef.current;
+      if (!pool.length) return;
+
+      // Mark image as processing
+      setImages(prev =>
+        prev.map(img => (img.id === image.id ? { ...img, status: 'processing', progress: 0 } : img))
       );
 
+      // Transfer buffer
       const fileBuffer = await image.file.arrayBuffer();
       const sourceType = getFileType(image.file);
-      
-      if (!fileBuffer.byteLength) {
-        throw new Error('Empty file');
-      }
 
-      // Decode the image
-      const imageData = await decode(sourceType, fileBuffer);
-      
-      if (!imageData || !imageData.width || !imageData.height) {
-        throw new Error('Invalid image data');
-      }
+      // Dispatch to a worker
+      const worker = pool[roundRobinIndex.current % pool.length];
+      roundRobinIndex.current += 1;
 
-      // Encode to the target format
-      const compressedBuffer = await encode(outputType, imageData, options);
-      
-      if (!compressedBuffer.byteLength) {
-        throw new Error('Failed to compress image');
-      }
-
-      const blob = new Blob([compressedBuffer], { type: `image/${outputType}` });
-      const preview = URL.createObjectURL(blob);
-
-      setImages((prev) =>
-        prev.map((img) =>
-          img.id === image.id
-            ? {
-                ...img,
-                status: 'complete' as const,
-                preview,
-                blob,
-                compressedSize: compressedBuffer.byteLength,
-                outputType,
-              }
-            : img
-        )
+      worker.postMessage(
+        {
+          id: image.id,
+          fileBuffer,
+          sourceType,
+          outputType,
+          compressionOptions,
+          resizeOptions,
+          startTime: Date.now(),
+        },
+        [fileBuffer] // Transferable
       );
-    } catch (error) {
-      console.error('Error processing image:', error);
-      setImages((prev) =>
-        prev.map((img) =>
-          img.id === image.id
-            ? {
-                ...img,
-                status: 'error' as const,
-                error: error instanceof Error 
-                  ? error.message 
-                  : 'Failed to process image',
-              }
-            : img
-        )
-      );
-    } finally {
-      processingImages.current.delete(image.id);
-      processingCount.current--;
-      // Try to process next images if any
-      setTimeout(processNextInQueue, 0);
-    }
-  }, [options, outputType, setImages]);
+    },
+    [compressionOptions, outputType, setImages, resizeOptions]
+  );
 
-  const processNextInQueue = useCallback(() => {
-    console.log('Processing next in queue:', {
-      queueLength: queue.length,
-      processingCount: processingCount.current,
-      processingImages: [...processingImages.current]
-    });
-
+  useEffect(() => {
     if (queue.length === 0) return;
-
-    // Get all images we can process in this batch
-    setImages(prev => {
-      const imagesToProcess = prev.filter(img => 
-        queue.includes(img.id) && 
-        !processingImages.current.has(img.id) &&
-        processingCount.current < MAX_PARALLEL_PROCESSING
-      );
-
-      console.log('Found images to process:', imagesToProcess.length);
-
-      if (imagesToProcess.length === 0) return prev;
-
-      // Start processing these images
-      imagesToProcess.forEach((image, index) => {
-        setTimeout(() => {
-          processImage(image);
-        }, index * 100);
+    // Process each item in queue
+    queue.forEach(id => {
+      setImages(prev => {
+        const image = prev.find(img => img.id === id);
+        if (image) processImage(image);
+        return prev;
       });
-
-      // Remove these from queue
-      setQueue(current => current.filter(id => 
-        !imagesToProcess.some(img => img.id === id)
-      ));
-
-      // Update status to queued
-      return prev.map(img => 
-        imagesToProcess.some(processImg => processImg.id === img.id)
-          ? { ...img, status: 'queued' as const }
-          : img
-      );
     });
+    // Clear queue
+    setQueue([]);
   }, [queue, processImage, setImages]);
 
-  // Start processing when queue changes
-  useEffect(() => {
-    console.log('Queue changed:', queue.length);
-    if (queue.length > 0) {
-      processNextInQueue();
-    }
-  }, [queue, processNextInQueue]);
-
   const addToQueue = useCallback((imageId: string) => {
-    console.log('Adding to queue:', imageId);
     setQueue(prev => [...prev, imageId]);
   }, []);
 

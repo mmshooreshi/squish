@@ -1,15 +1,18 @@
 import { createCanvas, imageDataToCanvas } from './canvas';
 
-interface ResizeOptions {
+interface ExtendedResizeOptions {
   width?: number;
   height?: number;
   maintainAspectRatio?: boolean;
+  method?: 'lanczos3'; // currently fixed
+  premultiplyAlpha?: boolean;
+  linearRGB?: boolean;
 }
 
 export function calculateDimensions(
   originalWidth: number,
   originalHeight: number,
-  options: ResizeOptions
+  options: ExtendedResizeOptions
 ): { width: number; height: number } {
   const { width: targetWidth = 0, height: targetHeight = 0, maintainAspectRatio = true } = options;
 
@@ -45,23 +48,19 @@ export function calculateDimensions(
   };
 }
 
-export function resizeImage(imageData: ImageData, options: ResizeOptions): ImageData {
+export function resizeImage(imageData: ImageData, options: ExtendedResizeOptions): ImageData {
   const sourceCanvas = imageDataToCanvas(imageData);
-  
-  const { width, height } = calculateDimensions(
-    imageData.width,
-    imageData.height,
-    options
-  );
+  const { width, height } = calculateDimensions(imageData.width, imageData.height, options);
 
   const destCanvas = createCanvas(width, height);
   const ctx = destCanvas.getContext('2d')!;
 
-  // Use better image scaling algorithm
+  // Use high-quality scaling.
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  
+
+  // Note: The Canvas API does not expose the Lanczos3 algorithm or premultiply/linearRGB controls.
+  // These options are kept for documentation/future implementation.
   ctx.drawImage(sourceCanvas, 0, 0, width, height);
-  
   return ctx.getImageData(0, 0, width, height);
 }
