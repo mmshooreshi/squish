@@ -74,7 +74,7 @@ export function useImageQueue(
     roundRobinIndex.current = 0;
 
     // Cap the processLevel at 1–4 just in case
-    const numWorkers = Math.max(1, Math.min(4, processLevel));
+    const numWorkers = Math.max(1, Math.min(12, processLevel));
 
     // Spawn exactly numWorkers
     for (let i = 0; i < numWorkers; i++) {

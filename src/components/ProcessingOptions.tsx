@@ -9,12 +9,12 @@ export function ProcessingOptions({ processLevel, onChange }: ProcessingOptionsP
   return (
     <div className="bg-white p-6 rounded-lg shadow-sm mt-6">
       <label className="block text-sm font-medium text-gray-700 mb-2">
-        Processing Intensity (1: light, 4: aggressive)
+        Processing Intensity (1: light, 12: aggressive)
       </label>
       <input
         type="range"
         min="1"
-        max="4"
+        max="12"
         step="1"
         value={processLevel}
         onChange={(e) => onChange(Number(e.target.value))}

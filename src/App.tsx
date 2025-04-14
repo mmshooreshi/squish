@@ -18,7 +18,7 @@ export function App() {
     quality: DEFAULT_QUALITY_SETTINGS.webp, // or whichever default
   });
   const [resizeOptions, setResizeOptions] = useState(DEFAULT_RESIZE_OPTIONS);
-  const [processLevel, setProcessLevel] = useState(4); // processing intensity
+  const [processLevel, setProcessLevel] = useState(2); // processing intensity
 
   // Update each "processing" image's elapsed time every 2 seconds
   useEffect(() => {
