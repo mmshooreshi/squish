@@ -18,120 +18,145 @@ export function useImageQueue(
   resizeOptions: ResizeOptions,
   processLevel: number
 ) {
-  // We’ll create a small worker pool (up to 4 workers).
-  const MAX_POOL_SIZE = 4;
+  const MAX_POOL_SIZE = 4; // up to 4 workers
   const workerPoolRef = useRef<Worker[]>([]);
   const roundRobinIndex = useRef(0);
+
   const [queue, setQueue] = useState<string[]>([]);
 
-  // Single handler for all worker messages
-  const messageHandler = useCallback((event: MessageEvent<WorkerResponse>) => {
-    const { id, success, compressedBuffer, error, outputType, progress } = event.data;
+  // Single event handler for all worker messages.
+  const messageHandler = useCallback(
+    (event: MessageEvent<WorkerResponse>) => {
+      const { id, success, compressedBuffer, error, outputType, progress } = event.data;
 
-    if (progress !== undefined) {
-      setImages((prev) =>
-        prev.map((img) => (img.id === id ? { ...img, progress } : img))
-      );
-    }
-
-    if (success) {
-      if (compressedBuffer) {
-        const blob = new Blob([compressedBuffer], { type: `image/${outputType}` });
-        const preview = URL.createObjectURL(blob);
+      if (progress !== undefined) {
         setImages((prev) =>
-          prev.map((img) =>
-            img.id === id
-              ? {
-                  ...img,
-                  status: 'complete',
-                  preview,
-                  blob,
-                  compressedSize: compressedBuffer.byteLength,
-                  outputType: outputType as OutputType,
-                  progress: 100
-                }
-              : img
-          )
+          prev.map((img) => (img.id === id ? { ...img, progress } : img))
         );
       }
-    } else if (error) {
-      setImages((prev) =>
-        prev.map((img) =>
-          img.id === id ? { ...img, status: 'error', error } : img
-        )
-      );
-    }
-  }, [setImages]);
 
-  // Create or recreate the worker pool whenever processLevel changes
+      if (success && compressedBuffer && outputType) {
+        try {
+          const blob = new Blob([compressedBuffer], { type: `image/${outputType}` });
+          const preview = URL.createObjectURL(blob);
+          setImages((prev) =>
+            prev.map((img) =>
+              img.id === id
+                ? {
+                    ...img,
+                    status: 'complete',
+                    preview,
+                    blob,
+                    compressedSize: compressedBuffer.byteLength,
+                    outputType: outputType as OutputType,
+                    progress: 100
+                  }
+                : img
+            )
+          );
+        } catch (blobError) {
+          alert(`Error creating blob or preview: ${String(blobError)}`);
+        }
+      } else if (success === false && error) {
+        // Worker indicated an error
+        alert(`Worker error: ${error}`);
+        setImages((prev) =>
+          prev.map((img) => (img.id === id ? { ...img, status: 'error', error } : img))
+        );
+      }
+    },
+    [setImages]
+  );
+
+  // Create/refresh a worker pool whenever processLevel changes
   useEffect(() => {
+    // Terminate existing workers
     workerPoolRef.current.forEach((w) => w.terminate());
     workerPoolRef.current = [];
+    roundRobinIndex.current = 0;
 
-    let numWorkers = 1;
-    if (processLevel >= 3) {
-      // spawn up to 4
-      numWorkers = Math.min(MAX_POOL_SIZE, navigator.hardwareConcurrency || MAX_POOL_SIZE);
-    }
+    let numWorkers = processLevel < 3
+      ? 1
+      : Math.min(MAX_POOL_SIZE, navigator.hardwareConcurrency || MAX_POOL_SIZE);
 
     for (let i = 0; i < numWorkers; i++) {
-      const worker = new Worker(
-        new URL('../workers/imageProcessor.worker.ts', import.meta.url),
-        { type: 'module' }
-      );
-      worker.addEventListener('message', messageHandler);
-      workerPoolRef.current.push(worker);
+      try {
+        const worker = new Worker(new URL('../workers/imageProcessor.worker.ts', import.meta.url), { type: 'module' });
+        worker.addEventListener('message', messageHandler);
+        worker.addEventListener('error', (evt) => {
+          alert(`Worker runtime error: ${evt.message || 'Unknown error'}`);
+        });
+        worker.addEventListener('messageerror', (evt) => {
+          alert(`Worker message parsing error: ${String(evt.data)}`);
+        });
+        workerPoolRef.current.push(worker);
+      } catch (createWorkerErr) {
+        alert(`Failed to create worker: ${String(createWorkerErr)}`);
+      }
     }
 
+    // Cleanup on unmount or processLevel change
     return () => {
       workerPoolRef.current.forEach((w) => w.terminate());
+      workerPoolRef.current = [];
     };
   }, [processLevel, messageHandler]);
 
-  const processImage = useCallback(async (image: ImageFile) => {
-    const pool = workerPoolRef.current;
-    if (!pool.length) return;
+  // Send an image to the next worker in the pool
+  const processImage = useCallback(
+    async (image: ImageFile) => {
+      const pool = workerPoolRef.current;
+      if (!pool.length) {
+        alert(`No worker available to process image: ${image.file.name}`);
+        return;
+      }
 
-    setImages((prev) =>
-      prev.map((img) =>
-        img.id === image.id
-          ? { ...img, status: 'processing', progress: 0 }
-          : img
-      )
-    );
+      setImages((prev) =>
+        prev.map((img) =>
+          img.id === image.id
+            ? { ...img, status: 'processing', progress: 0, startTime: Date.now() }
+            : img
+        )
+      );
 
-    const fileBuffer = await image.file.arrayBuffer();
-    const sourceType = getFileType(image.file);
+      try {
+        const fileBuffer = await image.file.arrayBuffer();
+        const sourceType = getFileType(image.file);
+        const worker = pool[roundRobinIndex.current % pool.length];
+        roundRobinIndex.current++;
 
-    const worker = pool[roundRobinIndex.current % pool.length];
-    roundRobinIndex.current += 1;
+        worker.postMessage(
+          {
+            id: image.id,
+            fileBuffer,
+            sourceType,
+            outputType,
+            compressionOptions,
+            resizeOptions
+          },
+          [fileBuffer]
+        );
+      } catch (e) {
+        alert(`Error reading file buffer: ${String(e)}`);
+      }
+    },
+    [compressionOptions, outputType, resizeOptions, setImages]
+  );
 
-    worker.postMessage(
-      {
-        id: image.id,
-        fileBuffer,
-        sourceType,
-        outputType,
-        compressionOptions,
-        resizeOptions
-      },
-      [fileBuffer] // Transfer
-    );
-  }, [compressionOptions, outputType, setImages, resizeOptions]);
-
-  // Whenever queue changes, process items
+  // Whenever items get added to queue, process them
   useEffect(() => {
     if (queue.length === 0) return;
-    queue.forEach((id) => {
+    queue.forEach((imageId) => {
       setImages((prev) => {
-        const image = prev.find((x) => x.id === id);
-        if (image) processImage(image);
+        const found = prev.find((img) => img.id === imageId);
+        if (found) processImage(found);
         return prev;
       });
     });
     setQueue([]);
   }, [queue, processImage, setImages]);
 
+  // Expose a function to add IDs to the queue
   const addToQueue = useCallback((imageId: string) => {
     setQueue((prev) => [...prev, imageId]);
   }, []);
