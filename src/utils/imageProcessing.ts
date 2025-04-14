@@ -7,9 +7,15 @@ import type { OutputType, CompressionOptions } from '../types';
 import type { AvifEncodeOptions, JpegEncodeOptions, JxlEncodeOptions, WebpEncodeOptions } from '../types/encoders';
 import { ensureWasmLoaded } from './wasm';
 
+// Small helper to yield control to the browser for a moment (helps UI stay responsive).
+async function yieldControl(delay = 10) {
+  return new Promise<void>((resolve) => setTimeout(resolve, delay));
+}
+
 export async function decode(sourceType: string, fileBuffer: ArrayBuffer): Promise<ImageData> {
   // Ensure WASM is loaded for the source type
   await ensureWasmLoaded(sourceType as OutputType);
+  await yieldControl(); // yield after loading
 
   try {
     switch (sourceType) {
@@ -30,12 +36,20 @@ export async function decode(sourceType: string, fileBuffer: ArrayBuffer): Promi
   } catch (error) {
     console.error(`Failed to decode ${sourceType} image:`, error);
     throw new Error(`Failed to decode ${sourceType} image`);
+  } finally {
+    // yield again after decode
+    await yieldControl();
   }
 }
 
-export async function encode(outputType: OutputType, imageData: ImageData, options: CompressionOptions): Promise<ArrayBuffer> {
+export async function encode(
+  outputType: OutputType,
+  imageData: ImageData,
+  options: CompressionOptions
+): Promise<ArrayBuffer> {
   // Ensure WASM is loaded for the output type
   await ensureWasmLoaded(outputType);
+  await yieldControl();
 
   try {
     switch (outputType) {
@@ -72,6 +86,8 @@ export async function encode(outputType: OutputType, imageData: ImageData, optio
   } catch (error) {
     console.error(`Failed to encode to ${outputType}:`, error);
     throw new Error(`Failed to encode to ${outputType}`);
+  } finally {
+    await yieldControl();
   }
 }
 
