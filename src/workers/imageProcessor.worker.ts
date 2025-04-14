@@ -30,31 +30,23 @@ interface WorkerResponse {
 }
 
 self.onmessage = async (event: MessageEvent<WorkerMessageData>) => {
-  const {
-    id,
-    fileBuffer,
-    sourceType,
-    outputType,
-    compressionOptions,
-    resizeOptions
-  } = event.data;
-
+  const { id, fileBuffer, sourceType, outputType, compressionOptions, resizeOptions } = event.data;
   try {
-    // 1) Decode
+    // Decode phase
     const decoded = await decode(sourceType || 'image/jpeg', fileBuffer);
     self.postMessage({ id, progress: 50 } as WorkerResponse);
 
-    // 2) Resize if enabled
+    // Resize if needed
     let finalData = decoded;
     if (resizeOptions?.enabled) {
       finalData = resizeImage(decoded, resizeOptions);
     }
 
-    // 3) Encode
+    // Encode phase
     const compressedBuffer = await encode(outputType as any, finalData, compressionOptions);
     self.postMessage({ id, progress: 100 } as WorkerResponse);
 
-    // 4) Return success
+    // Final result sent with transfer
     self.postMessage(
       {
         id,
@@ -65,7 +57,6 @@ self.onmessage = async (event: MessageEvent<WorkerMessageData>) => {
       [compressedBuffer]
     );
   } catch (error) {
-    // Post an error response (main thread will alert)
     self.postMessage({
       id,
       success: false,
