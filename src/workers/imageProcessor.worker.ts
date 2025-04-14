@@ -32,27 +32,27 @@ interface WorkerResponse {
 self.onmessage = async (event: MessageEvent<WorkerMessageData>) => {
   const { id, fileBuffer, sourceType, outputType, compressionOptions, resizeOptions } = event.data;
   try {
-    // Decode phase
+    // 1) Decode
     const decoded = await decode(sourceType || 'image/jpeg', fileBuffer);
     self.postMessage({ id, progress: 50 } as WorkerResponse);
 
-    // Resize if needed
+    // 2) Resize if needed
     let finalData = decoded;
     if (resizeOptions?.enabled) {
       finalData = resizeImage(decoded, resizeOptions);
     }
 
-    // Encode phase
+    // 3) Encode
     const compressedBuffer = await encode(outputType as any, finalData, compressionOptions);
     self.postMessage({ id, progress: 100 } as WorkerResponse);
 
-    // Final result sent with transfer
+    // 4) Return the result
     self.postMessage(
       {
         id,
         success: true,
         compressedBuffer,
-        outputType
+        outputType,
       } as WorkerResponse,
       [compressedBuffer]
     );
@@ -60,7 +60,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessageData>) => {
     self.postMessage({
       id,
       success: false,
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error ? error.message : String(error),
     } as WorkerResponse);
   }
 };

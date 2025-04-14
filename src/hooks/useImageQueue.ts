@@ -1,107 +1,172 @@
-import { useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import type { ImageFile, OutputType, CompressionOptions, ResizeOptions } from '../types';
-import { getFileType, decode, encode } from '../utils/imageProcessing';
-import { resizeImage } from '../utils/resize';
+import { getFileType } from '../utils/imageProcessing';
 
-function yieldControl(delay = 10): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, delay));
+interface WorkerResponse {
+  id: string;
+  success: boolean;
+  compressedBuffer?: ArrayBuffer;
+  error?: string;
+  outputType?: string;
+  progress?: number;
 }
 
 export function useImageQueue(
   compressionOptions: CompressionOptions,
   outputType: OutputType,
   setImages: React.Dispatch<React.SetStateAction<ImageFile[]>>,
-  resizeOptions: ResizeOptions
+  resizeOptions: ResizeOptions,
+  processLevel: number // 1–4
 ) {
-  // Process a single image
-  const processImage = useCallback(async (image: ImageFile) => {
-    if (image.status !== 'pending') return; // Avoid re-processing
-    setImages(prev =>
-      prev.map(img =>
-        img.id === image.id
-          ? { ...img, status: 'processing', progress: 0, startTime: Date.now() }
-          : img
-      )
-    );
-    try {
-      // 1. Get file buffer
-      const fileBuffer = await image.file.arrayBuffer();
-      await yieldControl(10);
-      
-      // 2. Determine source type
-      const sourceType = getFileType(image.file);
-      await yieldControl(10);
-      
-      // 3. Decode image
-      const imageData = await decode(sourceType, fileBuffer);
-      setImages(prev =>
-        prev.map(img =>
-          img.id === image.id ? { ...img, progress: 33 } : img
-        )
+  const workerPoolRef = useRef<Worker[]>([]);
+  const roundRobinIndex = useRef(0);
+
+  const [queue, setQueue] = useState<string[]>([]);
+
+  // Handle all worker messages
+  const messageHandler = useCallback((event: MessageEvent<WorkerResponse>) => {
+    const { id, success, compressedBuffer, error, outputType, progress } = event.data;
+
+    // If we have progress, update it
+    if (progress !== undefined) {
+      setImages((prev) =>
+        prev.map((img) => (img.id === id ? { ...img, progress } : img))
       );
-      await yieldControl(10);
-      
-      // 4. If resize is enabled, perform resize
-      let finalData = imageData;
-      if (resizeOptions && resizeOptions.enabled) {
-        finalData = await resizeImage(imageData, resizeOptions);
-        setImages(prev =>
-          prev.map(img =>
-            img.id === image.id ? { ...img, progress: 66 } : img
+    }
+
+    if (success && compressedBuffer && outputType) {
+      try {
+        const blob = new Blob([compressedBuffer], { type: `image/${outputType}` });
+        const preview = URL.createObjectURL(blob);
+        setImages((prev) =>
+          prev.map((img) =>
+            img.id === id
+              ? {
+                  ...img,
+                  status: 'complete',
+                  preview,
+                  blob,
+                  compressedSize: compressedBuffer.byteLength,
+                  outputType: outputType as OutputType,
+                  progress: 100
+                }
+              : img
           )
         );
-        await yieldControl(10);
+      } catch (blobError) {
+        alert(`Error creating blob: ${String(blobError)}`);
       }
-      
-      // 5. Encode image
-      const compressedBuffer = await encode(outputType, finalData, compressionOptions);
-      setImages(prev =>
-        prev.map(img =>
-          img.id === image.id ? { ...img, progress: 90 } : img
-        )
-      );
-      await yieldControl(10);
-      
-      // 6. Create blob & update image info
-      const blob = new Blob([compressedBuffer], { type: `image/${outputType}` });
-      const preview = URL.createObjectURL(blob);
-      setImages(prev =>
-        prev.map(img =>
-          img.id === image.id
-            ? {
-                ...img,
-                status: 'complete',
-                progress: 100,
-                blob,
-                preview,
-                compressedSize: compressedBuffer.byteLength,
-                outputType
-              }
-            : img
-        )
-      );
-    } catch (e) {
-      alert(`Error processing ${image.file.name}: ${e instanceof Error ? e.message : String(e)}`);
-      setImages(prev =>
-        prev.map(img =>
-          img.id === image.id
-            ? { ...img, status: 'error', error: e instanceof Error ? e.message : String(e) }
-            : img
+    } else if (success === false && error) {
+      alert(`Worker error for ${id}: ${error}`);
+      setImages((prev) =>
+        prev.map((img) =>
+          img.id === id ? { ...img, status: 'error', error } : img
         )
       );
     }
-  }, [compressionOptions, outputType, resizeOptions, setImages]);
+  }, [setImages]);
 
-  // Directly add the image to processing (no queue delays)
-  const addToQueue = useCallback((imageId: string) => {
-    setImages(prev => {
-      const image = prev.find(img => img.id === imageId);
-      if (image && image.status === 'pending') {
-        processImage(image);
+  // Create or recreate the worker pool whenever processLevel changes
+  useEffect(() => {
+    // Terminate old workers
+    workerPoolRef.current.forEach((w) => w.terminate());
+    workerPoolRef.current = [];
+    roundRobinIndex.current = 0;
+
+    // Cap the processLevel at 1–4 just in case
+    const numWorkers = Math.max(1, Math.min(4, processLevel));
+
+    // Spawn exactly numWorkers
+    for (let i = 0; i < numWorkers; i++) {
+      try {
+        const worker = new Worker(
+          new URL('../workers/imageProcessor.worker.ts', import.meta.url),
+          { type: 'module' }
+        );
+        worker.addEventListener('message', messageHandler);
+        worker.addEventListener('error', (evt) => {
+          alert(`Worker runtime error: ${evt.message || 'Unknown error'}`);
+        });
+        workerPoolRef.current.push(worker);
+      } catch (createErr) {
+        alert(`Failed to create worker: ${String(createErr)}`);
       }
-      return prev;
+    }
+
+    return () => {
+      workerPoolRef.current.forEach((w) => w.terminate());
+      workerPoolRef.current = [];
+    };
+  }, [processLevel, messageHandler]);
+
+  const processImage = useCallback(
+    async (image: ImageFile) => {
+      // Only process if still pending
+      if (image.status !== 'pending') return;
+
+      setImages((prev) =>
+        prev.map((img) =>
+          img.id === image.id
+            ? { ...img, status: 'processing', progress: 0 }
+            : img
+        )
+      );
+
+      try {
+        const fileBuffer = await image.file.arrayBuffer();
+        const sourceType = getFileType(image.file);
+
+        // Pick a worker in round-robin
+        const pool = workerPoolRef.current;
+        if (!pool.length) {
+          alert('No worker available!');
+          return;
+        }
+        const worker = pool[roundRobinIndex.current % pool.length];
+        roundRobinIndex.current++;
+
+        worker.postMessage(
+          {
+            id: image.id,
+            fileBuffer,
+            sourceType,
+            outputType,
+            compressionOptions,
+            resizeOptions
+          },
+          [fileBuffer] // transfer
+        );
+      } catch (e) {
+        alert(`Error reading file buffer: ${String(e)}`);
+        setImages((prev) =>
+          prev.map((img) =>
+            img.id === image.id
+              ? { ...img, status: 'error', error: String(e) }
+              : img
+          )
+        );
+      }
+    },
+    [compressionOptions, outputType, resizeOptions, setImages]
+  );
+
+  // Fire off processing whenever queue is non-empty
+  useEffect(() => {
+    if (queue.length === 0) return;
+    queue.forEach((imageId) => {
+      setImages((prev) => {
+        const image = prev.find((x) => x.id === imageId && x.status === 'pending');
+        if (image) processImage(image);
+        return prev;
+      });
     });
-  }, [processImage, setImages]);
+    setQueue([]);
+  }, [queue, processImage, setImages]);
+
+  // Called from the UI to add images to process
+  const addToQueue = useCallback((imageId: string) => {
+    setQueue((prev) => [...prev, imageId]);
+  }, []);
 
   return { addToQueue };
 }

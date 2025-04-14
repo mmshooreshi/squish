@@ -12,9 +12,16 @@ async function yieldControl(delay = 10) {
   return new Promise<void>((resolve) => setTimeout(resolve, delay));
 }
 
+
+// Preload all known formats once:
+export async function preloadAllWasm() {
+  const formats = ['avif', 'jpeg', 'jxl', 'png', 'webp'];
+  await Promise.all(formats.map((f) => ensureWasmLoaded(f as any)));
+}
+
+
 export async function decode(sourceType: string, fileBuffer: ArrayBuffer): Promise<ImageData> {
   // Ensure WASM is loaded for the source type
-  await ensureWasmLoaded(sourceType as OutputType);
   await yieldControl(); // yield after loading
 
   try {
@@ -48,7 +55,6 @@ export async function encode(
   options: CompressionOptions
 ): Promise<ArrayBuffer> {
   // Ensure WASM is loaded for the output type
-  await ensureWasmLoaded(outputType);
   await yieldControl();
 
   try {
@@ -56,7 +62,7 @@ export async function encode(
       case 'avif': {
         const avifOptions: AvifEncodeOptions = {
           quality: options.quality,
-          effort: 4 // Medium encoding effort
+          effort: 3 // Medium encoding effort
         };
         return await avif.encode(imageData, avifOptions as any);
       }
